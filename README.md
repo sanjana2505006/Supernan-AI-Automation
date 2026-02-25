@@ -1,5 +1,7 @@
 # 🎬 Supernan AI — Hindi Video Dubbing Pipeline
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sanjana2505006/Supernan-AI-Automation/blob/main/colab/dubbing_pipeline.ipynb)
+
 > **100% Open-Source • ₹0 Budget • Colab-Ready**
 > 
 > A modular Python pipeline that takes an English training video and produces a Hindi-dubbed version with lip-synced visuals and cloned voice — all using free, open-source tools.
@@ -80,7 +82,7 @@ Output: Hindi-Dubbed Video (15–30s)
 
 ```python
 # Cell 1: Clone repo
-!git clone https://github.com/YOUR_USERNAME/Supernan-AI-Automation.git
+!git clone https://github.com/sanjana2505006/Supernan-AI-Automation.git
 %cd Supernan-AI-Automation
 
 # Cell 2: Setup environment
@@ -103,7 +105,7 @@ uploaded = files.upload()  # Upload your video
 
 ```bash
 # 1. Clone
-git clone https://github.com/YOUR_USERNAME/Supernan-AI-Automation.git
+git clone https://github.com/sanjana2505006/Supernan-AI-Automation.git
 cd Supernan-AI-Automation
 
 # 2. Create virtual environment
