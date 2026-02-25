@@ -27,28 +27,28 @@ class Config:
             return "mps"
         return "cpu"
 
-    DEVICE = None  # Set at runtime via get_device()
+    DEVICE: str = ""  # Set at runtime via get_device()
 
     # ── FFmpeg ──────────────────────────────────────────────────────────
     FFMPEG_BIN = "ffmpeg"
     FFPROBE_BIN = "ffprobe"
 
     # ── Whisper (Transcription) ─────────────────────────────────────────
-    WHISPER_MODEL_SIZE = "base"       # tiny | base | small | medium | large
-    WHISPER_LANGUAGE = "en"           # Source language
-    WHISPER_SAMPLE_RATE = 16000       # Required by Whisper
+    WHISPER_MODEL_SIZE = "base"  # tiny | base | small | medium | large
+    WHISPER_LANGUAGE = "en"  # Source language
+    WHISPER_SAMPLE_RATE = 16000  # Required by Whisper
 
     # ── Translation ─────────────────────────────────────────────────────
-    TARGET_LANGUAGE = "hi"            # Hindi
+    TARGET_LANGUAGE = "hi"  # Hindi
     INDICTRANS2_MODEL = "ai4bharat/indictrans2-en-indic-dist-200M"
     INDICTRANS2_TOKENIZER = "ai4bharat/indictrans2-en-indic-dist-200M"
-    USE_INDICTRANS2 = True            # False → fallback to googletrans
+    USE_INDICTRANS2 = True  # False → fallback to googletrans
 
     # ── Voice Cloning (XTTS v2) ─────────────────────────────────────────
     XTTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
     VOICE_SAMPLE_RATE = 24000
-    REFERENCE_AUDIO_DURATION = 6      # seconds of reference audio for cloning
-    USE_XTTS = True                   # False → fallback to gTTS
+    REFERENCE_AUDIO_DURATION = 6  # seconds of reference audio for cloning
+    USE_XTTS = True  # False → fallback to gTTS
 
     # ── Lip Sync ────────────────────────────────────────────────────────
     LIPSYNC_ENGINE = "video_retalking"  # "video_retalking" | "wav2lip"
@@ -62,7 +62,7 @@ class Config:
     WAV2LIP_CHECKPOINT = WAV2LIP_DIR / "checkpoints" / "wav2lip_gan.pth"
 
     # ── Face Enhancement ────────────────────────────────────────────────
-    ENHANCE_ENGINE = "gfpgan"         # "gfpgan" | "codeformer"
+    ENHANCE_ENGINE = "gfpgan"  # "gfpgan" | "codeformer"
     GFPGAN_MODEL_PATH = MODELS_DIR / "GFPGANv1.4.pth"
     CODEFORMER_DIR = MODELS_DIR / "CodeFormer"
     UPSCALE_FACTOR = 2
@@ -71,18 +71,18 @@ class Config:
     # ── Output Settings ─────────────────────────────────────────────────
     OUTPUT_VIDEO_CODEC = "libx264"
     OUTPUT_AUDIO_CODEC = "aac"
-    OUTPUT_VIDEO_CRF = 18             # Quality: 0 (lossless) – 51 (worst)
-    OUTPUT_FPS = None                 # None = match source
-    OUTPUT_RESOLUTION = None          # None = match source
+    OUTPUT_VIDEO_CRF = 18  # Quality: 0 (lossless) – 51 (worst)
+    OUTPUT_FPS = None  # None = match source
+    OUTPUT_RESOLUTION = None  # None = match source
 
     # ── Segment Extraction ──────────────────────────────────────────────
-    DEFAULT_START_TIME = 15           # seconds
-    DEFAULT_END_TIME = 30             # seconds
+    DEFAULT_START_TIME = 15  # seconds
+    DEFAULT_END_TIME = 30  # seconds
 
     # ── Batching (for scaling to long videos) ───────────────────────────
-    MAX_SEGMENT_DURATION = 30         # Max seconds per batch
-    SILENCE_THRESHOLD_DB = -40        # dB threshold for silence detection
-    MIN_SILENCE_DURATION_MS = 500     # Minimum silence gap in ms
+    MAX_SEGMENT_DURATION = 30  # Max seconds per batch
+    SILENCE_THRESHOLD_DB = -40  # dB threshold for silence detection
+    MIN_SILENCE_DURATION_MS = 500  # Minimum silence gap in ms
 
     # ── Logging ─────────────────────────────────────────────────────────
     LOG_LEVEL = "INFO"

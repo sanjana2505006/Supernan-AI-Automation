@@ -268,21 +268,16 @@ def _tempo_stretch(audio_path: str, speed_ratio: float):
 
         audio = AudioSegment.from_file(audio_path)
 
-        # Speed up or slow down
-        if speed_ratio > 1.0:
-            # Audio is too long — speed it up
-            new_frame_rate = int(audio.frame_rate * speed_ratio)
-            audio = audio._spawn(
-                audio.raw_data, overrides={"frame_rate": new_frame_rate}
-            ).set_frame_rate(audio.frame_rate)
-        else:
-            # Audio is too short — slow it down
-            new_frame_rate = int(audio.frame_rate * speed_ratio)
-            audio = audio._spawn(
-                audio.raw_data, overrides={"frame_rate": new_frame_rate}
-            ).set_frame_rate(audio.frame_rate)
+        # Adjust frame rate to change playback speed
+        # Higher frame_rate = faster playback when resampled back
+        new_frame_rate = int(audio.frame_rate * speed_ratio)
+        adjusted = audio._spawn(
+            audio.raw_data, overrides={"frame_rate": new_frame_rate}
+        )
+        # Resample back to original rate to change duration
+        adjusted = adjusted.set_frame_rate(audio.frame_rate)
 
-        audio.export(audio_path, format="wav")
+        adjusted.export(audio_path, format="wav")
     except Exception as e:
         logger.warning(f"   ⚠️  Tempo stretch failed: {e}")
 

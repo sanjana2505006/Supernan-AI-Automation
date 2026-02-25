@@ -11,7 +11,7 @@ import logging
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from rich.logging import RichHandler
 from rich.console import Console
@@ -39,7 +39,8 @@ class Segment:
         return self.end - self.start
 
     def __repr__(self) -> str:
-        return f"Segment({self.start:.1f}–{self.end:.1f}s: '{self.text[:40]}...')"
+        text_preview = self.text[:40] + ("..." if len(self.text) > 40 else "")
+        return f"Segment({self.start:.1f}–{self.end:.1f}s: '{text_preview}')"
 
 
 @dataclass

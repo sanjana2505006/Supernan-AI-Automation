@@ -182,7 +182,12 @@ def _translate_googletrans(
         if not seg.text.strip():
             seg.translated = ""
             continue
-        seg.translated = _translate_single_google(seg.text, target_lang)
+        try:
+            result = translator.translate(seg.text, dest=target_lang, src="en")
+            seg.translated = result.text
+        except Exception as e:
+            logger.warning(f"   ⚠️  Google translate failed for segment: {e}")
+            seg.translated = seg.text  # Keep original as fallback
 
     logger.info(f"   ✅ googletrans translation complete")
     return segments
