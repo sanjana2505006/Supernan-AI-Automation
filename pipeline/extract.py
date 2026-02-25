@@ -122,6 +122,9 @@ def extract_audio(
         str(sample_rate),
         "-ac",
         channels,
+        # Apply loudnorm for consistent input levels
+        "-af",
+        "loudnorm=I=-16:LRA=11:TP=-1.5",
         str(output_path),
     ]
 
@@ -140,8 +143,9 @@ def extract_reference_audio(
     sample_rate: int = 24000,
 ) -> str:
     """
-    Extract a short reference clip for voice cloning.
-    Takes the first N seconds of clear speech.
+    Extract a reference clip for voice cloning.
+    Uses energy-based detection to find the best speech segment
+    (avoids starting on silence/noise).
 
     Args:
         audio_path: Source audio file
@@ -152,11 +156,48 @@ def extract_reference_audio(
     Returns:
         Path to reference audio clip
     """
+    # Try to find the best speech segment via energy analysis
+    best_start = 0.0
+    try:
+        import numpy as np
+        import soundfile as sf
+
+        y, sr = sf.read(audio_path)
+        if len(y.shape) > 1:
+            y = y.mean(axis=1)
+
+        # Calculate short-time energy in 0.5s windows
+        window_samples = int(0.5 * sr)
+        energies = []
+        for i in range(0, len(y) - window_samples, window_samples):
+            rms = np.sqrt(np.mean(y[i : i + window_samples] ** 2))
+            energies.append((i / sr, rms))
+
+        if energies:
+            # Find the sliding window of `duration` seconds with highest average energy
+            window_count = int(duration / 0.5)
+            best_energy = 0.0
+            for i in range(len(energies) - window_count + 1):
+                avg_energy = (
+                    sum(e[1] for e in energies[i : i + window_count]) / window_count
+                )
+                if avg_energy > best_energy:
+                    best_energy = avg_energy
+                    best_start = energies[i][0]
+
+            logger.info(f"   📍 Best speech segment starts at {best_start:.1f}s")
+
+    except Exception as e:
+        logger.debug(f"   Energy analysis skipped: {e}")
+        best_start = 0.0
+
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         str(audio_path),
+        "-ss",
+        str(best_start),
         "-t",
         str(duration),
         "-ar",

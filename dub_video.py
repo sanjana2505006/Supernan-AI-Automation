@@ -133,6 +133,27 @@ Examples:
         help="Use gTTS instead of XTTS v2 (no voice cloning)",
     )
     parser.add_argument(
+        "--api-transcribe",
+        type=str,
+        default="local",
+        choices=["local", "openai"],
+        help="Transcription engine to use (default: local)",
+    )
+    parser.add_argument(
+        "--api-translate",
+        type=str,
+        default="local",
+        choices=["local", "openai"],
+        help="Translation engine to use (default: local)",
+    )
+    parser.add_argument(
+        "--api-voice",
+        type=str,
+        default="local",
+        choices=["local", "elevenlabs", "openai"],
+        help="Voice generation engine to use (default: local)",
+    )
+    parser.add_argument(
         "--subtitles",
         action="store_true",
         help="Burn Hindi subtitles into the video",
@@ -241,6 +262,7 @@ def run_pipeline(args):
             model_size=args.whisper_model,
             language="en",
             device=device,
+            api_engine=args.api_transcribe,
         )
 
         # Merge very short segments for better translation
@@ -265,6 +287,7 @@ def run_pipeline(args):
             target_lang=args.lang,
             use_indictrans2=(not args.skip_translate_model),
             device=device,
+            api_engine=args.api_translate,
         )
 
         # Log translation
@@ -283,6 +306,7 @@ def run_pipeline(args):
             use_xtts=(not args.skip_voice_clone),
             device=device,
             target_lang=args.lang,
+            api_engine=args.api_voice,
         )
 
         # Concatenate all segment audio into one track

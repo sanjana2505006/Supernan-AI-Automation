@@ -151,6 +151,15 @@ python dub_video.py --input video.mp4 --subtitles --output subtitled.mp4
 
 # Keep intermediate files for debugging
 python dub_video.py --input video.mp4 --keep-workspace --output debug.mp4
+
+# High-quality with premium Paid APIs (OpenAI & ElevenLabs)
+export OPENAI_API_KEY="sk-..."
+export ELEVENLABS_API_KEY="sk_..."
+python dub_video.py --input video.mp4 \
+    --api-transcribe openai \
+    --api-translate openai \
+    --api-voice elevenlabs \
+    --output hq_premium.mp4
 ```
 
 ---
@@ -171,6 +180,9 @@ python dub_video.py --input video.mp4 --keep-workspace --output debug.mp4
 | `--skip-enhance` | `false` | No face restoration |
 | `--skip-voice-clone` | `false` | Use gTTS instead of XTTS |
 | `--skip-translate-model` | `false` | Use googletrans instead |
+| `--api-transcribe` | `local` | Transcription API: `local\|openai` |
+| `--api-translate` | `local` | Translation API: `local\|openai` |
+| `--api-voice` | `local` | Voice cloning API: `local\|elevenlabs\|openai` |
 | `--subtitles` | `false` | Burn Hindi subs |
 | `--device` | *auto* | `cuda\|cpu\|mps` |
 | `--keep-workspace` | `false` | Keep intermediate files |

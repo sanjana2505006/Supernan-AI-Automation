@@ -14,15 +14,17 @@ pydub>=0.25.1
 librosa>=0.10.0
 soundfile>=0.12.0
 scipy>=1.10.0
+noisereduce>=3.0.0              # Audio noise reduction for cleaner output
 
 # ── Transcription (Whisper) ─────────────────────────────────────
-openai-whisper>=20231117
+faster-whisper>=1.0.0            # Primary: CTranslate2-based (4x faster)
+openai-whisper>=20231117         # Fallback: original Whisper
 
 # ── Translation ─────────────────────────────────────────────────
 transformers>=4.35.0
 sentencepiece>=0.1.99
 protobuf>=3.20.0
-deep-translator          # Fallback translator
+deep-translator                  # Free Google Translate API wrapper
 
 # ── Voice Cloning (Coqui TTS / XTTS v2) ────────────────────────
 TTS>=0.22.0
@@ -43,3 +45,7 @@ imageio-ffmpeg>=0.4.8
 # ── Utilities ──────────────────────────────────────────────────
 click>=8.1.0
 rich>=13.0.0                      # Beautiful terminal output
+
+# ── Cloud APIs (Optional) ──────────────────────────────────────
+openai>=1.0.0                     # OpenAI API for Audio & Chat
+elevenlabs>=1.0.0                 # ElevenLabs API for Voice Cloning
