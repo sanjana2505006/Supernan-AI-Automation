@@ -182,6 +182,13 @@ def replace_audio(
         "aac",
         "-b:a",
         "192k",
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        # Normalize audio to broadcast standard
+        "-af",
+        "loudnorm=I=-14:LRA=7:TP=-2",
         "-shortest",
         str(output_path),
     ]

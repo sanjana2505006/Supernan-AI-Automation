@@ -289,6 +289,7 @@ def _post_process_segments(segments: List[Segment]) -> List[Segment]:
     """
     logger.info("   🔧 Post-processing audio segments")
 
+    processed_count = 0
     for seg in segments:
         if not seg.audio_path or not os.path.exists(seg.audio_path):
             continue
@@ -300,7 +301,20 @@ def _post_process_segments(segments: List[Segment]) -> List[Segment]:
             if y.size == 0:
                 continue
 
-            # Step 1: Noise reduction (optional)
+            # Ensure mono
+            if len(y.shape) > 1:
+                y = y.mean(axis=1)
+
+            # Step 1: High-pass filter to remove low-frequency rumble (<80Hz)
+            try:
+                from scipy.signal import butter, sosfilt
+
+                sos = butter(4, 80, btype="highpass", fs=sr, output="sos")
+                y = sosfilt(sos, y).astype(np.float32)
+            except ImportError:
+                pass
+
+            # Step 2: Noise reduction (optional)
             try:
                 import noisereduce as nr
 
@@ -313,19 +327,24 @@ def _post_process_segments(segments: List[Segment]) -> List[Segment]:
             except ImportError:
                 pass  # noisereduce not installed, skip
 
-            # Step 2: RMS normalization to -20 dBFS
+            # Step 3: RMS normalization to -20 dBFS
             y = _normalize_rms(y, target_db=-20.0)
 
-            # Step 3: Peak limiting to prevent clipping
+            # Step 4: Peak limiting to prevent clipping
             peak = np.max(np.abs(y))
             if peak > 0.95:
                 y = y * (0.95 / peak)
 
+            # Step 5: DC offset removal
+            y = y - np.mean(y)
+
             sf.write(seg.audio_path, y, sr, subtype="PCM_16")
+            processed_count += 1
 
         except Exception as e:
             logger.debug(f"   Post-processing skipped for segment: {e}")
 
+    logger.info(f"   ✅ Post-processed {processed_count}/{len(segments)} segments")
     return segments
 
 
@@ -529,9 +548,26 @@ def concatenate_audio_segments(
                     fade = np.linspace(1.0, 0.0, fade_samples)
                     seg_audio[-fade_samples:] *= fade
 
-            # Place segment (additive, but since we truncate to not overlap, it's clean)
+            # Place segment
             end_sample = min(start_sample + len(seg_audio), total_samples)
             actual_len = end_sample - start_sample
+
+            # Apply crossfade with previous segment if they're close
+            crossfade_samples = min(
+                int(0.02 * sample_rate), actual_len // 4
+            )  # 20ms crossfade
+            if crossfade_samples > 0 and start_sample > 0:
+                # Check if there's existing audio at the crossfade point
+                existing = output_audio[start_sample : start_sample + crossfade_samples]
+                if np.any(existing != 0):
+                    # Crossfade: fade out existing, fade in new
+                    fade_in = np.linspace(0.0, 1.0, crossfade_samples)
+                    fade_out = np.linspace(1.0, 0.0, crossfade_samples)
+                    output_audio[
+                        start_sample : start_sample + crossfade_samples
+                    ] *= fade_out
+                    seg_audio[:crossfade_samples] *= fade_in
+
             output_audio[start_sample:end_sample] = seg_audio[:actual_len]
 
         except Exception as e:
@@ -630,10 +666,21 @@ def _synthesize_elevenlabs(
                     if chunk:
                         f.write(chunk)
 
-            # Convert MP3 to WAV 24kHz
-            audio = AudioSegment.from_mp3(mp3_path)
-            audio = audio.set_frame_rate(24000).set_channels(1)
-            audio.export(output_path, format="wav")
+            # Convert MP3 to WAV 24kHz using proper resampling
+            try:
+                import librosa
+                import soundfile as sf_lib
+
+                y, sr = librosa.load(mp3_path, sr=None, mono=True)
+                if sr != 24000:
+                    y = librosa.resample(y, orig_sr=sr, target_sr=24000)
+                sf_lib.write(output_path, y, 24000, subtype="PCM_16")
+            except ImportError:
+                from pydub import AudioSegment
+
+                audio = AudioSegment.from_mp3(mp3_path)
+                audio = audio.set_frame_rate(24000).set_channels(1)
+                audio.export(output_path, format="wav")
 
             if os.path.exists(mp3_path):
                 os.remove(mp3_path)
@@ -691,10 +738,21 @@ def _synthesize_openai_tts(
             )
             response.stream_to_file(mp3_path)
 
-            # Convert MP3 to 24kHz WAV
-            audio = AudioSegment.from_mp3(mp3_path)
-            audio = audio.set_frame_rate(24000).set_channels(1)
-            audio.export(output_path, format="wav")
+            # Convert MP3 to 24kHz WAV using proper resampling
+            try:
+                import librosa
+                import soundfile as sf_lib
+
+                y, sr = librosa.load(mp3_path, sr=None, mono=True)
+                if sr != 24000:
+                    y = librosa.resample(y, orig_sr=sr, target_sr=24000)
+                sf_lib.write(output_path, y, 24000, subtype="PCM_16")
+            except ImportError:
+                from pydub import AudioSegment
+
+                audio = AudioSegment.from_mp3(mp3_path)
+                audio = audio.set_frame_rate(24000).set_channels(1)
+                audio.export(output_path, format="wav")
 
             if os.path.exists(mp3_path):
                 os.remove(mp3_path)
