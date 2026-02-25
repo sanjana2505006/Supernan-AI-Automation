@@ -1,8 +1,11 @@
 """
-Step 2: Audio Transcription via OpenAI Whisper
-===============================================
-Transcribes extracted audio to text with word-level timestamps.
-Supports multiple model sizes for Colab vs GPU tradeoffs.
+Step 2: Audio Transcription via Whisper
+=========================================
+Primary:  faster-whisper (CTranslate2) — 4x faster, lower memory
+Fallback: openai-whisper — original implementation
+Premium:  OpenAI Whisper API — cloud-based, best accuracy
+
+Includes VAD pre-filtering to reduce hallucinations on silence.
 """
 
 import os
@@ -18,15 +21,18 @@ def transcribe_audio(
     language: str = "en",
     device: Optional[str] = None,
     api_engine: str = "local",
+    initial_prompt: Optional[str] = None,
 ) -> List[Segment]:
     """
-    Transcribe audio using OpenAI Whisper.
+    Transcribe audio using Whisper (faster-whisper preferred, openai-whisper fallback).
 
     Args:
         audio_path: Path to WAV audio file (16kHz mono)
         model_size: Whisper model size (tiny|base|small|medium|large)
         language: Source language code
         device: Compute device (cuda|cpu|mps). Auto-detected if None.
+        api_engine: "local" or "openai"
+        initial_prompt: Optional context hint for Whisper
 
     Returns:
         List of Segment objects with text and timestamps
@@ -38,7 +44,6 @@ def transcribe_audio(
         medium — ~5GB VRAM, high accuracy
         large  — ~10GB VRAM, best accuracy (needs Colab Pro)
     """
-    import whisper
     import torch
 
     if device is None:
@@ -55,32 +60,134 @@ def transcribe_audio(
             logger.warning(f"⚠️  OpenAI Whisper API failed: {e}")
             logger.info("   Falling back to local Whisper...")
 
-    # ── Load Model ───────────────────────────────────────────────
+    # ── Try faster-whisper first (CTranslate2, 4x faster) ───────
+    try:
+        segments = _transcribe_faster_whisper(
+            audio_path, model_size, language, device, initial_prompt
+        )
+        return segments
+    except ImportError:
+        logger.info("   faster-whisper not installed, using openai-whisper")
+    except Exception as e:
+        logger.warning(f"⚠️  faster-whisper failed: {e}")
+        logger.info("   Falling back to openai-whisper...")
+
+    # ── Fallback: openai-whisper ─────────────────────────────────
+    return _transcribe_openai_whisper(
+        audio_path, model_size, language, device, initial_prompt
+    )
+
+
+def _transcribe_faster_whisper(
+    audio_path: str,
+    model_size: str = "base",
+    language: str = "en",
+    device: str = "cpu",
+    initial_prompt: Optional[str] = None,
+) -> List[Segment]:
+    """
+    Transcribe using faster-whisper (CTranslate2 backend).
+    4x faster than openai-whisper with lower memory usage.
+    """
+    from faster_whisper import WhisperModel
+
+    compute_type = "float16" if device == "cuda" else "int8"
+    logger.info(f"   Using faster-whisper ({model_size}, {compute_type})")
+
+    model = WhisperModel(
+        model_size,
+        device=(
+            device if device != "mps" else "cpu"
+        ),  # faster-whisper doesn't support MPS
+        compute_type=compute_type,
+    )
+
+    # VAD pre-filter to reduce hallucinations on silence
+    vad_filter = True
+    vad_params = {
+        "min_silence_duration_ms": 500,
+        "speech_pad_ms": 200,
+        "threshold": 0.35,
+    }
+
+    raw_segments, info = model.transcribe(
+        audio_path,
+        language=language,
+        task="transcribe",
+        word_timestamps=True,
+        vad_filter=vad_filter,
+        vad_parameters=vad_params,
+        initial_prompt=initial_prompt,
+        condition_on_previous_text=True,
+        beam_size=5,
+    )
+
+    segments = []
+    for seg in raw_segments:
+        text = seg.text.strip()
+        if text:  # Skip empty segments
+            segment = Segment(
+                text=text,
+                start=seg.start,
+                end=seg.end,
+            )
+            segments.append(segment)
+
+    # Log results
+    total_text = " ".join(s.text for s in segments)
+    logger.info(f"   ✅ Transcribed {len(segments)} segments (faster-whisper)")
+    logger.info(
+        f"   📝 Full text: \"{total_text[:100]}{'...' if len(total_text) > 100 else ''}\""
+    )
+    logger.info(
+        f"   🌐 Detected language: {info.language} (prob: {info.language_probability:.2f})"
+    )
+
+    del model
+    return segments
+
+
+def _transcribe_openai_whisper(
+    audio_path: str,
+    model_size: str = "base",
+    language: str = "en",
+    device: str = "cpu",
+    initial_prompt: Optional[str] = None,
+) -> List[Segment]:
+    """Transcribe using original openai-whisper."""
+    import whisper
+    import torch
+
+    logger.info(f"   Using openai-whisper ({model_size})")
+
+    # Load Model
     model = whisper.load_model(model_size, device=device)
 
-    # ── Transcribe with word timestamps ──────────────────────────
+    # Transcribe with word timestamps
     result = model.transcribe(
         audio_path,
         language=language,
         task="transcribe",
         word_timestamps=True,
         verbose=False,
-        fp16=(device == "cuda"),  # FP16 only on CUDA
+        fp16=(device == "cuda"),
         condition_on_previous_text=True,
-        initial_prompt=None,
+        initial_prompt=initial_prompt,
     )
 
-    # ── Parse segments ───────────────────────────────────────────
+    # Parse segments
     segments = []
     for seg in result.get("segments", []):
-        segment = Segment(
-            text=seg["text"].strip(),
-            start=seg["start"],
-            end=seg["end"],
-        )
-        segments.append(segment)
+        text = seg["text"].strip()
+        if text:  # Skip empty segments
+            segment = Segment(
+                text=text,
+                start=seg["start"],
+                end=seg["end"],
+            )
+            segments.append(segment)
 
-    # ── Log results ──────────────────────────────────────────────
+    # Log results
     total_text = " ".join(s.text for s in segments)
     logger.info(f"   ✅ Transcribed {len(segments)} segments")
     logger.info(
@@ -171,6 +278,7 @@ def merge_short_segments(
 ) -> List[Segment]:
     """
     Merge very short consecutive segments for better translation quality.
+    Uses bidirectional merging — merges when either previous OR current is too short.
 
     Args:
         segments: List of Segment objects
@@ -188,7 +296,12 @@ def merge_short_segments(
         prev = merged[-1]
         gap = seg.start - prev.end
 
-        if prev.duration < min_duration and gap <= max_gap:
+        # Merge if either segment is too short AND gap is small
+        should_merge = (
+            prev.duration < min_duration or seg.duration < min_duration
+        ) and gap <= max_gap
+
+        if should_merge:
             # Merge with previous
             merged[-1] = Segment(
                 text=f"{prev.text} {seg.text}",

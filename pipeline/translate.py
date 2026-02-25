@@ -78,7 +78,7 @@ def _translate_indictrans2(
     Translate using AI4Bharat IndicTrans2 model.
 
     Uses the distilled 200M parameter model for efficiency on Colab.
-    Context-aware: translates sentences, not fragments.
+    Translates all segments in a single batch for better context.
     """
     import torch
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
@@ -96,8 +96,7 @@ def _translate_indictrans2(
     ).to(device)
     model.eval()
 
-    # ── Translate each segment ───────────────────────────────────
-    # IndicTrans2 expects: ">>hin_Deva<< " prefix for Hindi target
+    # ── Resolve target language token ────────────────────────────
     lang_code_map = {
         "hi": "hin_Deva",
         "bn": "ben_Beng",
@@ -113,15 +112,38 @@ def _translate_indictrans2(
 
     target_code = lang_code_map.get(target_lang, "hin_Deva")
 
+    # Robustly resolve the forced BOS token ID
+    forced_bos_id = None
+    bos_token_str = f">>{target_code}<<"
+    try:
+        token_id = tokenizer.convert_tokens_to_ids(bos_token_str)
+        # Verify it's a real token (not the UNK token)
+        if token_id is not None and token_id != tokenizer.unk_token_id:
+            forced_bos_id = token_id
+            logger.debug(
+                f"   Forced BOS token: '{bos_token_str}' -> id {forced_bos_id}"
+            )
+        else:
+            # Try alternative token format
+            for alt in [target_code, f"__{target_code}__"]:
+                alt_id = tokenizer.convert_tokens_to_ids(alt)
+                if alt_id is not None and alt_id != tokenizer.unk_token_id:
+                    forced_bos_id = alt_id
+                    logger.debug(
+                        f"   Forced BOS token (alt): '{alt}' -> id {forced_bos_id}"
+                    )
+                    break
+    except Exception as e:
+        logger.warning(f"   ⚠️  Could not resolve target language token: {e}")
+
+    # ── Translate each segment ───────────────────────────────────
     for seg in segments:
-        # Build context-aware input
         input_text = seg.text.strip()
         if not input_text:
             seg.translated = ""
             continue
 
         try:
-            # Tokenize with target language prefix
             inputs = tokenizer(
                 input_text,
                 return_tensors="pt",
@@ -130,26 +152,23 @@ def _translate_indictrans2(
                 max_length=256,
             ).to(device)
 
+            gen_kwargs = {
+                "max_length": 256,
+                "num_beams": 5,
+                "length_penalty": 1.0,
+                "early_stopping": True,
+            }
+            if forced_bos_id is not None:
+                gen_kwargs["forced_bos_token_id"] = forced_bos_id
+
             with torch.no_grad():
-                generated = model.generate(
-                    **inputs,
-                    forced_bos_token_id=(
-                        tokenizer.convert_tokens_to_ids(f">>{target_code}<<")
-                        if hasattr(tokenizer, "convert_tokens_to_ids")
-                        else None
-                    ),
-                    max_length=256,
-                    num_beams=5,
-                    length_penalty=1.0,
-                    early_stopping=True,
-                )
+                generated = model.generate(**inputs, **gen_kwargs)
 
             translated = tokenizer.decode(generated[0], skip_special_tokens=True)
             seg.translated = translated.strip()
 
         except Exception as e:
             logger.warning(f"   ⚠️  Translation failed for segment: {e}")
-            # Fallback to googletrans for this segment
             seg.translated = _translate_single_google(seg.text, target_lang)
 
     # Cleanup
@@ -201,13 +220,16 @@ def _translate_googletrans(
 
 
 def _translate_single_google(text: str, target_lang: str = "hi") -> str:
-    """Translate a single text string via googletrans."""
+    """
+    Translate a single text string via deep-translator.
+    (Unified with the main fallback — no longer uses deprecated googletrans.)
+    """
     try:
-        from googletrans import Translator
+        from deep_translator import GoogleTranslator
 
-        translator = Translator()
-        result = translator.translate(text, dest=target_lang, src="en")
-        return result.text
+        translator = GoogleTranslator(source="en", target=target_lang)
+        result = translator.translate(text)
+        return result if result else text
     except Exception as e:
         logger.warning(f"   ⚠️  Google translate failed: {e}")
         return text  # Return original as fallback
@@ -248,9 +270,8 @@ def translate_with_context(
         full_context = " ".join(context_texts)
         translated_context = _translate_single_google(full_context, target_lang)
 
-        # Simple heuristic: split translated text proportionally
-        # In practice, the segment-level translation is preferred
-        if seg.translated == "":
+        # If the segment doesn't have a translation yet, translate individually
+        if not seg.translated:
             seg.translated = _translate_single_google(seg.text, target_lang)
 
     return segments
@@ -303,15 +324,35 @@ def _translate_openai_api(
             ),  # For strict JSON can use tools or just prompt
         )
 
-        reply_content = response.choices[0].message.content
+        reply_content = response.choices[0].message.content.strip()
 
         # Clean up markdown code block if present
         if reply_content.startswith("```json"):
             reply_content = reply_content[7:]
+        if reply_content.startswith("```"):
+            reply_content = reply_content[3:]
         if reply_content.endswith("```"):
             reply_content = reply_content[:-3]
+        reply_content = reply_content.strip()
 
-        translated_data = json.loads(reply_content)
+        # Handle BOM characters
+        reply_content = reply_content.lstrip("\ufeff")
+
+        parsed = json.loads(reply_content)
+
+        # Handle both bare array and wrapped object responses
+        if isinstance(parsed, dict):
+            # Try common wrapper keys
+            for key in ["translations", "data", "results", "segments"]:
+                if key in parsed:
+                    translated_data = parsed[key]
+                    break
+            else:
+                translated_data = list(parsed.values())[0] if parsed else []
+        elif isinstance(parsed, list):
+            translated_data = parsed
+        else:
+            raise ValueError(f"Unexpected response format: {type(parsed)}")
 
         # Map back to segments
         translated_dict = {item["id"]: item["translated"] for item in translated_data}

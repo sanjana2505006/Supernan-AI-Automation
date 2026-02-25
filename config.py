@@ -37,10 +37,13 @@ class Config:
     FFMPEG_BIN = "ffmpeg"
     FFPROBE_BIN = "ffprobe"
 
-    # ── Whisper (Transcription) ─────────────────────────────────────────
+    # ── Whisper (Transcription) ─────────────────────────────────
     WHISPER_MODEL_SIZE = "base"  # tiny | base | small | medium | large
     WHISPER_LANGUAGE = "en"  # Source language
     WHISPER_SAMPLE_RATE = 16000  # Required by Whisper
+    WHISPER_ENGINE = "faster-whisper"  # "faster-whisper" | "openai-whisper"
+    WHISPER_INITIAL_PROMPT = None  # Optional context hint for better accuracy
+    WHISPER_VAD_THRESHOLD = 0.35  # Silero VAD sensitivity (0.0–1.0)
 
     # ── Translation ─────────────────────────────────────────────────────
     TARGET_LANGUAGE = "hi"  # Hindi
@@ -48,11 +51,20 @@ class Config:
     INDICTRANS2_TOKENIZER = "ai4bharat/indictrans2-en-indic-dist-200M"
     USE_INDICTRANS2 = True  # False → fallback to googletrans
 
-    # ── Voice Cloning (XTTS v2) ─────────────────────────────────────────
+    # ── Voice Cloning (XTTS v2) ─────────────────────────────────
     XTTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
     VOICE_SAMPLE_RATE = 24000
     REFERENCE_AUDIO_DURATION = 6  # seconds of reference audio for cloning
     USE_XTTS = True  # False → fallback to gTTS
+    XTTS_TEMPERATURE = 0.65  # Lower = more stable speech
+    XTTS_REPETITION_PENALTY = 5.0  # Prevent repeated syllables
+    XTTS_TOP_K = 50  # Focused token sampling
+    XTTS_TOP_P = 0.85  # Nucleus sampling threshold
+
+    # ── Audio Post-Processing ──────────────────────────────────
+    AUDIO_NORMALIZE_TARGET_DB = -20.0  # RMS normalization target (dBFS)
+    AUDIO_DENOISE = True  # Apply noise reduction to synthesized audio
+    AUDIO_PEAK_LIMIT = 0.95  # Peak limiting to prevent clipping
 
     # ── Lip Sync ────────────────────────────────────────────────────────
     LIPSYNC_ENGINE = "video_retalking"  # "video_retalking" | "wav2lip"

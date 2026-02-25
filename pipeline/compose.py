@@ -72,6 +72,9 @@ def compose_final(
         "44100",  # Standard audio sample rate
         "-ac",
         "2",  # Stereo output
+        # Normalize audio to broadcast standard (-14 LUFS)
+        "-af",
+        "loudnorm=I=-14:LRA=7:TP=-2",
         "-pix_fmt",
         "yuv420p",  # Maximum compatibility
         "-movflags",
@@ -261,8 +264,8 @@ def add_subtitles(
 
 
 def _generate_srt(segments: list, output_path: str):
-    """Generate SRT subtitle file from segments."""
-    with open(output_path, "w", encoding="utf-8") as f:
+    """Generate SRT subtitle file from segments with proper UTF-8 BOM for Hindi."""
+    with open(output_path, "w", encoding="utf-8-sig") as f:  # BOM for Devanagari
         for i, seg in enumerate(segments, 1):
             start = _seconds_to_srt_time(seg.start)
             end = _seconds_to_srt_time(seg.end)

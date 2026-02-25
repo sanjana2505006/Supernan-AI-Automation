@@ -3,11 +3,18 @@ Step 4: Hindi Voice Cloning & TTS
 ==================================
 Primary:  Coqui XTTS v2 — Free, open-source, supports Hindi, clones voice from 6s reference
 Fallback: gTTS — Free Google TTS, no voice cloning but always works
+
+Audio Quality Notes:
+  • All segments are RMS-normalized to -20 dBFS before concatenation
+  • Time-stretch uses librosa (pitch-preserving WSOLA) not pydub frame-rate hack
+  • gTTS MP3→WAV uses librosa for proper anti-aliased resampling
+  • Optional noisereduce pass cleans up synthesis artifacts
 """
 
 import os
 import wave
 import struct
+import numpy as np
 from pathlib import Path
 from typing import List, Optional
 
@@ -67,6 +74,9 @@ def clone_voice(
         segments = _synthesize_local_fallback(
             reference_audio, segments, output_dir, use_xtts, device, target_lang
         )
+
+    # ── Post-process: normalize + denoise ────────────────────────
+    segments = _post_process_segments(segments)
 
     # ── Duration matching ────────────────────────────────────────
     # Stretch/compress each audio to match original segment duration
@@ -143,20 +153,42 @@ def _synthesize_xtts(
                 f'   🎤 Segment {i+1}/{len(segments)}: "{seg.translated[:50]}..."'
             )
 
-            # Generate speech with voice cloning
+            # Generate speech with voice cloning — tuned for Hindi quality
             tts.tts_to_file(
                 text=seg.translated,
                 speaker_wav=reference_audio,
                 language=target_lang,
                 file_path=output_path,
+                # Improved inference parameters
+                temperature=0.65,  # Lower = more stable, less random
+                repetition_penalty=5.0,  # Prevent repeated syllables
+                top_k=50,  # Focused sampling for clarity
+                top_p=0.85,  # Nucleus sampling threshold
             )
 
             seg.audio_path = output_path
             logger.debug(f"   ✅ Saved: {output_path}")
 
+        except TypeError:
+            # Older TTS versions may not support all kwargs — retry without them
+            try:
+                tts.tts_to_file(
+                    text=seg.translated,
+                    speaker_wav=reference_audio,
+                    language=target_lang,
+                    file_path=output_path,
+                )
+                seg.audio_path = output_path
+            except Exception as e2:
+                logger.warning(f"   ⚠️  XTTS failed for segment {i}: {e2}")
+                seg.audio_path = _gtts_single(
+                    seg.translated,
+                    str(output_dir / f"hindi_segment_{i:04d}_fallback.wav"),
+                    target_lang,
+                )
+
         except Exception as e:
             logger.warning(f"   ⚠️  XTTS failed for segment {i}: {e}")
-            # Fall back to gTTS for this segment
             seg.audio_path = _gtts_single(
                 seg.translated,
                 str(output_dir / f"hindi_segment_{i:04d}_fallback.wav"),
@@ -200,21 +232,32 @@ def _synthesize_gtts(
 
 
 def _gtts_single(text: str, output_path: str, lang: str = "hi") -> str:
-    """Generate a single audio file using gTTS."""
+    """Generate a single audio file using gTTS with proper resampling."""
     from gtts import gTTS
-    from pydub import AudioSegment
+    import soundfile as sf
 
-    # gTTS outputs MP3, convert to WAV
+    # gTTS outputs MP3, convert to WAV with proper resampling
     mp3_path = output_path.replace(".wav", ".mp3")
 
     try:
         tts = gTTS(text=text, lang=lang, slow=False)
         tts.save(mp3_path)
 
-        # Convert MP3 → WAV (24kHz mono)
-        audio = AudioSegment.from_mp3(mp3_path)
-        audio = audio.set_frame_rate(24000).set_channels(1)
-        audio.export(output_path, format="wav")
+        # Convert MP3 → WAV (24kHz mono) using librosa for quality resampling
+        try:
+            import librosa
+
+            y, sr = librosa.load(mp3_path, sr=None, mono=True)
+            if sr != 24000:
+                y = librosa.resample(y, orig_sr=sr, target_sr=24000)
+            sf.write(output_path, y, 24000, subtype="PCM_16")
+        except ImportError:
+            # Fallback to pydub if librosa unavailable
+            from pydub import AudioSegment
+
+            audio = AudioSegment.from_mp3(mp3_path)
+            audio = audio.set_frame_rate(24000).set_channels(1)
+            audio.export(output_path, format="wav")
 
         # Cleanup MP3
         if os.path.exists(mp3_path):
@@ -233,12 +276,86 @@ def _gtts_single(text: str, output_path: str, lang: str = "hi") -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Audio Post-Processing
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _post_process_segments(segments: List[Segment]) -> List[Segment]:
+    """
+    Post-process synthesized audio segments:
+      1. Noise reduction (if noisereduce available)
+      2. RMS normalization to consistent volume (-20 dBFS)
+    """
+    logger.info("   🔧 Post-processing audio segments")
+
+    for seg in segments:
+        if not seg.audio_path or not os.path.exists(seg.audio_path):
+            continue
+
+        try:
+            import soundfile as sf
+
+            y, sr = sf.read(seg.audio_path)
+            if y.size == 0:
+                continue
+
+            # Step 1: Noise reduction (optional)
+            try:
+                import noisereduce as nr
+
+                y = nr.reduce_noise(
+                    y=y,
+                    sr=sr,
+                    stationary=True,
+                    prop_decrease=0.6,  # Don't over-denoise
+                )
+            except ImportError:
+                pass  # noisereduce not installed, skip
+
+            # Step 2: RMS normalization to -20 dBFS
+            y = _normalize_rms(y, target_db=-20.0)
+
+            # Step 3: Peak limiting to prevent clipping
+            peak = np.max(np.abs(y))
+            if peak > 0.95:
+                y = y * (0.95 / peak)
+
+            sf.write(seg.audio_path, y, sr, subtype="PCM_16")
+
+        except Exception as e:
+            logger.debug(f"   Post-processing skipped for segment: {e}")
+
+    return segments
+
+
+def _normalize_rms(audio: np.ndarray, target_db: float = -20.0) -> np.ndarray:
+    """Normalize audio to target RMS level in dBFS."""
+    if audio.size == 0:
+        return audio
+
+    rms = np.sqrt(np.mean(audio**2))
+    if rms < 1e-8:  # Effectively silent
+        return audio
+
+    current_db = 20 * np.log10(rms + 1e-10)
+    gain_db = target_db - current_db
+    gain = 10 ** (gain_db / 20)
+
+    return audio * gain
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Duration Matching
+# ═══════════════════════════════════════════════════════════════════
+
+
 def _match_durations(segments: List[Segment]) -> List[Segment]:
     """
     Adjust synthesized audio duration to match original segment timing.
 
     This is CRITICAL for lip sync quality (30% of scoring).
-    Uses time-stretching to preserve pitch while changing tempo.
+    Uses librosa time-stretch (pitch-preserving WSOLA algorithm).
     """
     logger.info("   ⏱️  Matching audio durations to original segments")
 
@@ -252,15 +369,19 @@ def _match_durations(segments: List[Segment]) -> List[Segment]:
         if actual_duration <= 0 or target_duration <= 0:
             continue
 
-        ratio = actual_duration / target_duration
+        # speed_ratio > 1 means we need to speed up (shorten)
+        # speed_ratio < 1 means we need to slow down (lengthen)
+        speed_ratio = actual_duration / target_duration
 
         # Only adjust if difference is significant (>10%)
-        if abs(ratio - 1.0) > 0.10:
+        if abs(speed_ratio - 1.0) > 0.10:
+            # Clamp to reasonable range to avoid extreme distortion
+            speed_ratio = max(0.5, min(speed_ratio, 2.5))
             logger.debug(
                 f"   Adjusting segment: {actual_duration:.2f}s → {target_duration:.2f}s "
-                f"(ratio: {ratio:.2f}x)"
+                f"(speed: {speed_ratio:.2f}x)"
             )
-            _tempo_stretch(seg.audio_path, ratio)
+            _tempo_stretch(seg.audio_path, speed_ratio)
 
     return segments
 
@@ -268,27 +389,45 @@ def _match_durations(segments: List[Segment]) -> List[Segment]:
 def _get_audio_duration(audio_path: str) -> float:
     """Get duration of a WAV file in seconds."""
     try:
-        with wave.open(audio_path, "rb") as wf:
-            frames = wf.getnframes()
-            rate = wf.getframerate()
-            return frames / float(rate)
+        import soundfile as sf
+
+        info = sf.info(audio_path)
+        return info.duration
     except Exception:
         try:
-            from pydub import AudioSegment
-
-            audio = AudioSegment.from_file(audio_path)
-            return len(audio) / 1000.0
+            with wave.open(audio_path, "rb") as wf:
+                frames = wf.getnframes()
+                rate = wf.getframerate()
+                return frames / float(rate)
         except Exception:
             return 0.0
 
 
 def _tempo_stretch(audio_path: str, speed_ratio: float):
     """
-    Time-stretch audio without changing pitch.
-    Uses pydub for simple cases, pyrubberband if available.
+    Time-stretch audio WITHOUT changing pitch.
+
+    Uses librosa.effects.time_stretch (WSOLA-based) which preserves pitch.
+    This replaces the old pydub frame-rate hack that was incorrectly
+    shifting pitch along with tempo.
     """
     try:
-        # Try pyrubberband first (better quality)
+        import librosa
+        import soundfile as sf
+
+        y, sr = librosa.load(audio_path, sr=None, mono=True)
+
+        # librosa time_stretch: rate > 1 = speed up, rate < 1 = slow down
+        y_stretched = librosa.effects.time_stretch(y=y, rate=speed_ratio)
+
+        sf.write(audio_path, y_stretched, sr, subtype="PCM_16")
+        return
+
+    except ImportError:
+        logger.warning("   ⚠️  librosa not available for time-stretch")
+
+    # Secondary fallback: pyrubberband (if available)
+    try:
         import pyrubberband as pyrb
         import soundfile as sf
 
@@ -299,24 +438,11 @@ def _tempo_stretch(audio_path: str, speed_ratio: float):
     except ImportError:
         pass
 
-    # Fallback: pydub speed change (acceptable quality)
-    try:
-        from pydub import AudioSegment
-
-        audio = AudioSegment.from_file(audio_path)
-
-        # Adjust frame rate to change playback speed
-        # Higher frame_rate = faster playback when resampled back
-        new_frame_rate = int(audio.frame_rate * speed_ratio)
-        adjusted = audio._spawn(
-            audio.raw_data, overrides={"frame_rate": new_frame_rate}
-        )
-        # Resample back to original rate to change duration
-        adjusted = adjusted.set_frame_rate(audio.frame_rate)
-
-        adjusted.export(audio_path, format="wav")
-    except Exception as e:
-        logger.warning(f"   ⚠️  Tempo stretch failed: {e}")
+    # Last resort: do nothing rather than break pitch
+    logger.warning(
+        "   ⚠️  No pitch-preserving time-stretch available. "
+        "Install librosa or pyrubberband. Skipping duration adjustment."
+    )
 
 
 def _create_silence(
@@ -341,6 +467,10 @@ def concatenate_audio_segments(
     Concatenate all segment audio files into a single track,
     preserving original timing with silence gaps.
 
+    Uses numpy array placement instead of pydub overlay to avoid
+    garbled audio when segments overlap. Overlapping segments are
+    truncated to fit their allocated time slot.
+
     Args:
         segments: List of Segment objects with audio_path populated
         output_path: Path for concatenated output
@@ -349,29 +479,78 @@ def concatenate_audio_segments(
     Returns:
         Path to concatenated audio file
     """
-    from pydub import AudioSegment
+    import soundfile as sf
 
     logger.info(f"   🔗 Concatenating {len(segments)} audio segments")
 
-    # Create a silent base track of the target duration
     sample_rate = 24000
-    base = AudioSegment.silent(
-        duration=int(total_duration * 1000), frame_rate=sample_rate
-    )
+    total_samples = int(total_duration * sample_rate)
+    output_audio = np.zeros(total_samples, dtype=np.float32)
 
-    for seg in segments:
+    for i, seg in enumerate(segments):
         if not seg.audio_path or not os.path.exists(seg.audio_path):
             continue
 
-        segment_audio = AudioSegment.from_file(seg.audio_path)
-        position_ms = int(seg.start * 1000)
+        try:
+            # Load segment audio
+            try:
+                import librosa
 
-        # Overlay segment at its original position
-        base = base.overlay(segment_audio, position=position_ms)
+                seg_audio, sr = librosa.load(seg.audio_path, sr=sample_rate, mono=True)
+            except ImportError:
+                seg_audio, sr = sf.read(seg.audio_path)
+                if len(seg_audio.shape) > 1:
+                    seg_audio = seg_audio.mean(axis=1)
+                if sr != sample_rate:
+                    from scipy.signal import resample as scipy_resample
+
+                    num_samples = int(len(seg_audio) * sample_rate / sr)
+                    seg_audio = scipy_resample(seg_audio, num_samples)
+
+            # Calculate placement position
+            start_sample = int(seg.start * sample_rate)
+            start_sample = max(0, min(start_sample, total_samples - 1))
+
+            # Calculate max allowed length for this segment
+            # (don't overflow into next segment or beyond total duration)
+            max_end_sample = total_samples
+            if i + 1 < len(segments):
+                next_start = int(segments[i + 1].start * sample_rate)
+                max_end_sample = min(max_end_sample, next_start)
+
+            available_samples = max_end_sample - start_sample
+
+            # Truncate segment if it's too long
+            if len(seg_audio) > available_samples:
+                # Apply short fade-out to avoid click at truncation point
+                fade_samples = min(int(0.01 * sample_rate), available_samples)
+                seg_audio = seg_audio[:available_samples]
+                if fade_samples > 0:
+                    fade = np.linspace(1.0, 0.0, fade_samples)
+                    seg_audio[-fade_samples:] *= fade
+
+            # Place segment (additive, but since we truncate to not overlap, it's clean)
+            end_sample = min(start_sample + len(seg_audio), total_samples)
+            actual_len = end_sample - start_sample
+            output_audio[start_sample:end_sample] = seg_audio[:actual_len]
+
+        except Exception as e:
+            logger.warning(f"   ⚠️  Failed to load segment audio {seg.audio_path}: {e}")
+            continue
+
+    # Apply short fade-in/fade-out to full track to avoid clicks
+    fade_len = min(int(0.005 * sample_rate), total_samples // 4)
+    if fade_len > 0:
+        output_audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len)
+        output_audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len)
+
+    # Final peak limiting
+    peak = np.max(np.abs(output_audio))
+    if peak > 0.95:
+        output_audio = output_audio * (0.95 / peak)
 
     # Export
-    base = base.set_frame_rate(sample_rate).set_channels(1)
-    base.export(output_path, format="wav")
+    sf.write(output_path, output_audio, sample_rate, subtype="PCM_16")
 
     logger.info(f"   ✅ Concatenated audio: {output_path} ({total_duration:.1f}s)")
     return output_path
