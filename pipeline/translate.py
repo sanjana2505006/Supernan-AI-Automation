@@ -163,18 +163,18 @@ def _translate_googletrans(
     target_lang: str = "hi",
 ) -> List[Segment]:
     """
-    Translate using free Google Translate API (googletrans library).
+    Translate using free Google Translate API (deep-translator library).
     No GPU required, but rate-limited and slightly lower quality.
     """
-    logger.info("   Using googletrans (free fallback)")
+    logger.info("   Using deep-translator (free fallback)")
 
     try:
-        from googletrans import Translator
+        from deep_translator import GoogleTranslator
 
-        translator = Translator()
+        translator = GoogleTranslator(source="en", target=target_lang)
     except ImportError:
         logger.error(
-            "googletrans not installed. Install with: pip install googletrans==4.0.0-rc.1"
+            "deep-translator not installed. Install with: pip install deep-translator"
         )
         raise
 
@@ -183,13 +183,12 @@ def _translate_googletrans(
             seg.translated = ""
             continue
         try:
-            result = translator.translate(seg.text, dest=target_lang, src="en")
-            seg.translated = result.text
+            seg.translated = translator.translate(seg.text)
         except Exception as e:
             logger.warning(f"   ⚠️  Google translate failed for segment: {e}")
             seg.translated = seg.text  # Keep original as fallback
 
-    logger.info(f"   ✅ googletrans translation complete")
+    logger.info(f"   ✅ deep-translator translation complete")
     return segments
 
 

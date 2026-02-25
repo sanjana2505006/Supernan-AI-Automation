@@ -22,7 +22,7 @@ openai-whisper>=20231117
 transformers>=4.35.0
 sentencepiece>=0.1.99
 protobuf>=3.20.0
-googletrans==4.0.0-rc.1          # Fallback translator
+deep-translator          # Fallback translator
 
 # ── Voice Cloning (Coqui TTS / XTTS v2) ────────────────────────
 TTS>=0.22.0
