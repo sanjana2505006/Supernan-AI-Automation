@@ -158,7 +158,15 @@ def _transcribe_openai_whisper(
     import whisper
     import torch
 
-    logger.info(f"   Using openai-whisper ({model_size})")
+    # MPS doesn't support float64 which word_timestamps requires (DTW alignment).
+    # Force CPU for MPS to avoid 'Cannot convert MPS Tensor to float64' crash.
+    if device == "mps":
+        logger.info(
+            "   ⚠️  MPS detected — using CPU for openai-whisper (MPS float64 bug)"
+        )
+        device = "cpu"
+
+    logger.info(f"   Using openai-whisper ({model_size}) on {device}")
 
     # Load Model
     model = whisper.load_model(model_size, device=device)
