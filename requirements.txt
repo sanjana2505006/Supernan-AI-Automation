@@ -43,3 +43,7 @@ imageio-ffmpeg>=0.4.8
 # ── Utilities ──────────────────────────────────────────────────
 click>=8.1.0
 rich>=13.0.0                      # Beautiful terminal output
+
+# ── Cloud APIs ──────────────────────────────────────────────────
+openai>=1.0.0                     # OpenAI API for Audio & Chat
+elevenlabs>=1.0.0                 # ElevenLabs API for Voice Cloning

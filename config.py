@@ -11,6 +11,10 @@ from pathlib import Path
 class Config:
     """Pipeline configuration with sensible defaults for Colab/local."""
 
+    # ── API Keys ────────────────────────────────────────────────────────
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+
     # ── Project Paths ───────────────────────────────────────────────────
     PROJECT_ROOT = Path(__file__).parent.resolve()
     WORKSPACE_DIR = PROJECT_ROOT / "workspace"

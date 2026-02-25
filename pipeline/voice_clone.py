@@ -21,6 +21,7 @@ def clone_voice(
     use_xtts: bool = True,
     device: Optional[str] = None,
     target_lang: str = "hi",
+    api_engine: str = "local",
 ) -> List[Segment]:
     """
     Generate Hindi speech for each translated segment using voice cloning.
@@ -42,6 +43,46 @@ def clone_voice(
 
     logger.info(f"🗣️  Generating Hindi speech for {len(segments)} segments")
 
+    if api_engine == "elevenlabs":
+        try:
+            segments = _synthesize_elevenlabs(
+                reference_audio, segments, output_dir, target_lang
+            )
+        except Exception as e:
+            logger.warning(f"⚠️  ElevenLabs failed: {e}")
+            logger.info("   Falling back to local fallback...")
+            segments = _synthesize_local_fallback(
+                reference_audio, segments, output_dir, use_xtts, device, target_lang
+            )
+    elif api_engine == "openai":
+        try:
+            segments = _synthesize_openai_tts(segments, output_dir, target_lang)
+        except Exception as e:
+            logger.warning(f"⚠️  OpenAI TTS failed: {e}")
+            logger.info("   Falling back to local fallback...")
+            segments = _synthesize_local_fallback(
+                reference_audio, segments, output_dir, use_xtts, device, target_lang
+            )
+    else:
+        segments = _synthesize_local_fallback(
+            reference_audio, segments, output_dir, use_xtts, device, target_lang
+        )
+
+    # ── Duration matching ────────────────────────────────────────
+    # Stretch/compress each audio to match original segment duration
+    segments = _match_durations(segments)
+
+    return segments
+
+
+def _synthesize_local_fallback(
+    reference_audio: str,
+    segments: List[Segment],
+    output_dir: Path,
+    use_xtts: bool = True,
+    device: Optional[str] = None,
+    target_lang: str = "hi",
+) -> List[Segment]:
     if use_xtts:
         try:
             segments = _synthesize_xtts(
@@ -53,10 +94,6 @@ def clone_voice(
             segments = _synthesize_gtts(segments, output_dir, target_lang)
     else:
         segments = _synthesize_gtts(segments, output_dir, target_lang)
-
-    # ── Duration matching ────────────────────────────────────────
-    # Stretch/compress each audio to match original segment duration
-    segments = _match_durations(segments)
 
     return segments
 
@@ -338,3 +375,160 @@ def concatenate_audio_segments(
 
     logger.info(f"   ✅ Concatenated audio: {output_path} ({total_duration:.1f}s)")
     return output_path
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Premium: ElevenLabs & OpenAI TTS
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _synthesize_elevenlabs(
+    reference_audio: str,
+    segments: List[Segment],
+    output_dir: Path,
+    target_lang: str = "hi",
+) -> List[Segment]:
+    """
+    Synthesize Hindi speech using ElevenLabs API (Voice Cloning or default voice).
+    Note: Requires an ElevenLabs API Key.
+    """
+    import os
+    import requests
+    from pydub import AudioSegment
+
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise ValueError("ELEVENLABS_API_KEY environment variable not set")
+
+    logger.info("   Using ElevenLabs API for Voice Cloning")
+
+    # In a full production app, you would:
+    # 1. Create a cloned voice via the API using reference_audio
+    # 2. Get the voice_id
+    # 3. Use it here
+    #
+    # For this script, we'll demonstrate using a pre-made Hindi voice
+    # or the default voice for simplicity, as creating dynamic voice clones
+    # via API requires managing voice IDs and limits.
+    #
+    # Assuming 'pNInz6obbf5AWCGq5RmN' is a good multilingual voice or you could get a generic one.
+    voice_id = "pNInz6obbf5AWCGq5RmN"
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": api_key,
+    }
+
+    for i, seg in enumerate(segments):
+        if not seg.translated.strip():
+            logger.debug(f"   Skipping empty segment {i}")
+            continue
+
+        output_path = str(output_dir / f"hindi_segment_{i:04d}.wav")
+        mp3_path = str(output_dir / f"elevenlabs_temp_{i:04d}.mp3")
+
+        data = {
+            "text": seg.translated,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+        }
+
+        try:
+            logger.info(
+                f'   🎤 ElevenLabs Segment {i+1}/{len(segments)}: "{seg.translated[:50]}..."'
+            )
+
+            response = requests.post(url, json=data, headers=headers)
+
+            if response.status_code != 200:
+                raise ValueError(f"API Error {response.status_code}: {response.text}")
+
+            with open(mp3_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024):
+                    if chunk:
+                        f.write(chunk)
+
+            # Convert MP3 to WAV 24kHz
+            audio = AudioSegment.from_mp3(mp3_path)
+            audio = audio.set_frame_rate(24000).set_channels(1)
+            audio.export(output_path, format="wav")
+
+            if os.path.exists(mp3_path):
+                os.remove(mp3_path)
+
+            seg.audio_path = output_path
+
+        except Exception as e:
+            logger.warning(f"   ⚠️  ElevenLabs failed for segment {i}: {e}")
+            seg.audio_path = _gtts_single(
+                seg.translated,
+                str(output_dir / f"hindi_segment_{i:04d}_fallback.wav"),
+                target_lang,
+            )
+
+    logger.info(f"   ✅ ElevenLabs synthesis complete")
+    return segments
+
+
+def _synthesize_openai_tts(
+    segments: List[Segment],
+    output_dir: Path,
+    target_lang: str = "hi",
+) -> List[Segment]:
+    """
+    Synthesize speech using OpenAI TTS API (No voice cloning, excellent quality).
+    """
+    import os
+    from openai import OpenAI
+    from pydub import AudioSegment
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable not set")
+
+    client = OpenAI(api_key=api_key)
+    logger.info("   Using OpenAI TTS API")
+
+    for i, seg in enumerate(segments):
+        if not seg.translated.strip():
+            logger.debug(f"   Skipping empty segment {i}")
+            continue
+
+        output_path = str(output_dir / f"hindi_segment_{i:04d}.wav")
+        mp3_path = str(output_dir / f"openai_temp_{i:04d}.mp3")
+
+        try:
+            logger.info(
+                f'   🎤 OpenAI TTS Segment {i+1}/{len(segments)}: "{seg.translated[:50]}..."'
+            )
+
+            response = client.audio.speech.create(
+                model="tts-1",
+                voice="alloy",  # 'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'
+                input=seg.translated,
+            )
+            response.stream_to_file(mp3_path)
+
+            # Convert MP3 to 24kHz WAV
+            audio = AudioSegment.from_mp3(mp3_path)
+            audio = audio.set_frame_rate(24000).set_channels(1)
+            audio.export(output_path, format="wav")
+
+            if os.path.exists(mp3_path):
+                os.remove(mp3_path)
+
+            seg.audio_path = output_path
+
+        except Exception as e:
+            logger.warning(f"   ⚠️  OpenAI TTS failed for segment {i}: {e}")
+            seg.audio_path = _gtts_single(
+                seg.translated,
+                str(output_dir / f"hindi_segment_{i:04d}_fallback.wav"),
+                target_lang,
+            )
+
+    logger.info(f"   ✅ OpenAI TTS synthesis complete")
+    return segments

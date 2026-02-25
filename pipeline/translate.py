@@ -15,6 +15,7 @@ def translate_segments(
     target_lang: str = "hi",
     use_indictrans2: bool = True,
     device: Optional[str] = None,
+    api_engine: str = "local",
 ) -> List[Segment]:
     """
     Translate transcribed segments to Hindi.
@@ -37,6 +38,13 @@ def translate_segments(
     logger.info(
         f"   Source: \"{full_text[:80]}{'...' if len(full_text) > 80 else ''}\""
     )
+
+    if api_engine == "openai":
+        try:
+            return _translate_openai_api(segments, target_lang)
+        except Exception as e:
+            logger.warning(f"⚠️  OpenAI Translation API failed: {e}")
+            logger.info("   Falling back to local translation...")
 
     if use_indictrans2:
         try:
@@ -244,5 +252,95 @@ def translate_with_context(
         # In practice, the segment-level translation is preferred
         if seg.translated == "":
             seg.translated = _translate_single_google(seg.text, target_lang)
+
+    return segments
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Premium: OpenAI GPT Translation
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _translate_openai_api(
+    segments: List[Segment], target_lang: str = "hi"
+) -> List[Segment]:
+    """
+    Translate segments using OpenAI's GPT models (gpt-4o or gpt-3.5-turbo).
+    Produces highly contextual and natural translations while retaining segment mapping.
+    """
+    from openai import OpenAI
+    import os
+    import json
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable not set")
+
+    client = OpenAI(api_key=api_key)
+
+    logger.info(f"   Translating {len(segments)} segments via OpenAI API")
+
+    # We send all segments at once as a JSON array to maintain context
+    # and require a JSON array back to map exactly to the input segments.
+    input_data = [{"id": i, "text": s.text} for i, s in enumerate(segments)]
+
+    system_prompt = (
+        f"You are a professional video translator and localizer. "
+        f"Translate the following English video transcription segments into target language code '{target_lang}'. "
+        f"Ensure translations are natural, contextual across segments, and suitable for voice-over lip-syncing. "
+        f"Maintain the exact JSON list structure returning ONLY a JSON array of objects with 'id' and 'translated' keys."
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # Cost-effective and fast
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(input_data)},
+            ],
+            response_format=(
+                {"type": "json_object"} if False else None
+            ),  # For strict JSON can use tools or just prompt
+        )
+
+        reply_content = response.choices[0].message.content
+
+        # Clean up markdown code block if present
+        if reply_content.startswith("```json"):
+            reply_content = reply_content[7:]
+        if reply_content.endswith("```"):
+            reply_content = reply_content[:-3]
+
+        translated_data = json.loads(reply_content)
+
+        # Map back to segments
+        translated_dict = {item["id"]: item["translated"] for item in translated_data}
+
+        for i, seg in enumerate(segments):
+            if i in translated_dict:
+                seg.translated = translated_dict[i].strip()
+            else:
+                logger.warning(f"   ⚠️  OpenAI missed segment {i}, falling back")
+                seg.translated = _translate_single_google(seg.text, target_lang)
+
+    except Exception as e:
+        logger.warning(f"   ⚠️  OpenAI bulk translation failed: {e}")
+        # Process one by one if bulk fails
+        for seg in segments:
+            try:
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": f"Translate to {target_lang}. Keep it natural for dubbing.",
+                        },
+                        {"role": "user", "content": seg.text},
+                    ],
+                )
+                seg.translated = res.choices[0].message.content.strip()
+            except Exception as e2:
+                logger.warning(f"   ⚠️  OpenAI segment translation failed: {e2}")
+                seg.translated = _translate_single_google(seg.text, target_lang)
 
     return segments

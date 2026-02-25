@@ -17,6 +17,7 @@ def transcribe_audio(
     model_size: str = "base",
     language: str = "en",
     device: Optional[str] = None,
+    api_engine: str = "local",
 ) -> List[Segment]:
     """
     Transcribe audio using OpenAI Whisper.
@@ -45,6 +46,14 @@ def transcribe_audio(
 
     logger.info(f"🎙️  Transcribing with Whisper ({model_size}) on {device}")
     logger.info(f"   Source: {audio_path}")
+
+    # ── Check if using OpenAI API ────────────────────────────────
+    if api_engine == "openai":
+        try:
+            return _transcribe_openai_api(audio_path, language)
+        except Exception as e:
+            logger.warning(f"⚠️  OpenAI Whisper API failed: {e}")
+            logger.info("   Falling back to local Whisper...")
 
     # ── Load Model ───────────────────────────────────────────────
     model = whisper.load_model(model_size, device=device)
@@ -196,3 +205,65 @@ def merge_short_segments(
         )
 
     return merged
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Fallback / Premium: OpenAI Whisper API
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _transcribe_openai_api(audio_path: str, language: str = "en") -> List[Segment]:
+    """
+    Transcribe audio using the OpenAI Whisper API.
+    Provides better speed and often better accuracy than local small models.
+    """
+    from openai import OpenAI
+    import os
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable not set")
+
+    client = OpenAI(api_key=api_key)
+
+    logger.info(f"🎙️  Transcribing via OpenAI API")
+    logger.info(f"   Source: {audio_path}")
+
+    segments = []
+
+    # Check file size. OpenAI has a 25MB limit.
+    # A 15-30s 16kHz mono WAV file is ~0.5 - 1MB so it easily fits.
+    file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+    if file_size_mb > 24:
+        raise ValueError(f"Audio file too large for OpenAI API: {file_size_mb:.1f}MB")
+
+    with open(audio_path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language=language,
+            response_format="verbose_json",
+            timestamp_granularities=["segment"],
+        )
+
+    # Convert API response to Segment objects
+    if hasattr(transcript, "segments") and transcript.segments is not None:
+        for seg in transcript.segments:
+            segment = Segment(
+                text=seg.text.strip(),
+                start=seg.start,
+                end=seg.end,
+            )
+            segments.append(segment)
+
+    # ── Log results ──────────────────────────────────────────────
+    total_text = " ".join(s.text for s in segments)
+    logger.info(f"   ✅ Transcribed {len(segments)} segments via API")
+    logger.info(
+        f"   📝 Full text: \"{total_text[:100]}{'...' if len(total_text) > 100 else ''}\""
+    )
+
+    for i, seg in enumerate(segments):
+        logger.debug(f"   [{seg.start:.1f}s–{seg.end:.1f}s] {seg.text}")
+
+    return segments
