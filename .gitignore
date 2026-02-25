@@ -1,0 +1,52 @@
+# ═══════════════════════════════════════════════════════════════
+# .gitignore — Supernan AI Video Dubbing Pipeline
+# ═══════════════════════════════════════════════════════════════
+
+# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Virtual Environment ────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Workspace & Intermediates ──────────────────────────────
+workspace/
+models/
+*.wav
+*.mp3
+*.mp4
+*.avi
+*.mkv
+
+# Keep output directory structure but not videos
+!output/.gitkeep
+
+# ── IDE ────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ── Logs ───────────────────────────────────────────────────
+*.log
+pipeline.log
+
+# ── Jupyter ────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Model Weights ──────────────────────────────────────────
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
